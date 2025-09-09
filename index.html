@@ -797,6 +797,10 @@ els.btnRetrain.addEventListener('click', ()=>{
   // Regenerate future (with drift if toggled) and refit ML on latest window
   buildAndRender(true);
 });
+window.onload = () => {
+  const h = document.documentElement.scrollHeight;
+  parent.postMessage({type:"setHeight", height:h}, "*");
+};
 
 // Initial render: MA(7) ready and KPIs filled
 buildAndRender(false);
