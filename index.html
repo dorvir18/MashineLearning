@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>От классики к ML в прогнозировании спроса — интерактив</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#121821; --muted:#1b2430; --text:#e6edf3; --sub:#9fb3c8;
+    --accent:#5aa9ff; --accent2:#ffd166; --ok:#2ecc71; --warn:#ffb703; --bad:#ff6b6b;
+    --grid:#223042; --line1:#5aa9ff; --line2:#ffd166; --band:#5aa9ff33; --bar:#8ecae6;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
+  .wrap{display:grid;grid-template-columns:320px 1fr; gap:14px; padding:14px;}
+  aside{background:var(--panel); border:1px solid #0e141b; border-radius:12px; padding:12px; max-height:calc(100vh - 28px); overflow:auto}
+  main{display:flex; flex-direction:column; gap:10px}
+  h1{font-size:18px; margin:0 0 6px 0}
+  .section{border-top:1px solid #0f1620; padding-top:10px; margin-top:10px}
+  label, .hint{color:var(--sub)}
+  .row{display:flex; align-items:center; justify-content:space-between; gap:8px; margin:6px 0}
+  .row input[type="number"], .row input[type="text"]{width:70px; background:#0e141b; border:1px solid #1c2735; color:var(--text); border-radius:8px; padding:6px}
+  .row input[type="range"]{width:100%}
+  .chips{display:flex; flex-wrap:wrap; gap:6px}
+  .chip{background:var(--muted); color:var(--sub); padding:6px 8px; border-radius:999px; font-size:12px}
+  .grid{background:var(--panel); border:1px solid #0e141b; border-radius:12px; padding:10px}
+  /* KPI strip */
+  .kpi{display:grid; grid-template-columns:repeat(6,1fr); gap:8px}
+  .k{background:var(--panel); border:1px solid #0e141b; border-radius:10px; padding:10px}
+  .k b{display:block; font-size:12px; color:var(--sub)}
+  .k big{font-size:18px}
+  .good{color:var(--ok)} .mid{color:var(--warn)} .bad{color:var(--bad)}
+  .toolbar{display:flex; gap:8px; align-items:center; justify-content:flex-end}
+  button{background:linear-gradient(180deg,#1a2230,#131b26); color:var(--text); border:1px solid #223042; padding:8px 10px; border-radius:10px; cursor:pointer}
+  button:hover{filter:brightness(1.05)}
+  .model-note{font-size:12px; color:var(--sub)}
+  .two{display:grid; grid-template-columns: 2fr 1fr; gap:10px}
+  table{width:100%; border-collapse:collapse}
+  th,td{border-bottom:1px dashed #203042; padding:8px; text-align:right}
+  th:first-child, td:first-child{text-align:left}
+  .tag{font-size:11px; color:var(--sub)}
+  .warnline{font-size:12px; color:var(--warn)}
+  .foot{display:flex; gap:8px; align-items:center; justify-content:space-between}
+  .legend{display:flex; gap:12px; align-items:center}
+  .lg{display:flex; gap:6px; align-items:center; color:var(--sub); font-size:12px}
+  .dot{width:12px; height:4px; border-radius:2px}
+  .d1{background:var(--line1)} .d2{background:var(--line2)} .d3{background:var(--band)}
+  .bar-legend{display:flex; gap:8px; font-size:12px; color:var(--sub)}
+  .sticky-top{position:sticky; top:0; background:var(--panel); z-index:2; padding-bottom:6px; border-bottom:1px solid #0e141b}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <aside>
+    <div class="sticky-top">
+      <h1>От классики к ML (Classic → ML)</h1>
+      <div class="hint">Интерактив: переключайте модели и фичи — смотрите, как синеe п50 «липнет» к жёлтой фактической линии и как падает MAPE.</div>
+    </div>
+
+    <div class="section">
+      <b>1) Цель & Горизонт (Target & Horizon)</b>
+      <div class="row">
+        <span>Горизонт, недель (Horizon, weeks)</span>
+        <input id="hWeeks" type="range" min="2" max="12" value="4"/>
+        <span id="hWeeksVal" class="chip">4</span>
+      </div>
+      <div class="row">
+        <span>История, недель (History, weeks)</span>
+        <input id="histWeeks" type="range" min="8" max="52" value="26"/>
+        <span id="histWeeksVal" class="chip">26</span>
+      </div>
+      <div class="row">
+        <span>SKU</span>
+        <select id="skuSelect">
+          <option value="0">SKU A — напиток</option>
+          <option value="1">SKU B — шоколад</option>
+          <option value="2">SKU C — кофе</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="section">
+      <b>2) Подготовка данных (Data Prep)</b>
+      <div class="row"><label><input type="checkbox" id="prep_oos"> OOS (потери 40%) / OOS noise</label></div>
+      <div class="row"><label><input type="checkbox" id="prep_depromo"> de-promo (срез пиков, если Promo выкл.)</label></div>
+      <div class="row"><label><input type="checkbox" id="prep_impute" checked> импутация пропусков (Imputation)</label></div>
+    </div>
+
+    <div class="section">
+      <b>3) Фичи (Features)</b>
+      <div class="row"><label><input type="checkbox" id="f_dow" checked> День недели (Day of Week)</label></div>
+      <div class="hint">Повторяемость по дням недели (пн-вс) / weekly pattern.</div>
+      <div class="row"><label><input type="checkbox" id="f_season" checked> Сезон (Season: sin/cos + тренд)</label></div>
+      <div class="hint">Годовая волна и плавный тренд / yearly wave & trend.</div>
+      <div class="row"><label><input type="checkbox" id="f_weather" checked> Погода (Weather: cold_index)</label></div>
+      <div class="hint">Холод ↑ → спрос ↑ для горячих напитков.</div>
+      <div class="row"><label><input type="checkbox" id="f_price" checked> Цена (Price: up/down)</label></div>
+      <div class="hint">Скидка стимулирует спрос, рост цены — сдерживает.</div>
+      <div class="row"><label><input type="checkbox" id="f_promo" checked> Промо (Promotion)</label></div>
+      <div class="hint">Короткие всплески 2–3 дня / short promo spikes.</div>
+      <div class="row"><label><input type="checkbox" id="f_holiday" checked> Праздники (Holidays)</label></div>
+      <div class="hint">14 Feb, 31 Oct.</div>
+      <div class="row"><label><input type="checkbox" id="f_buzz" checked> Соцсети (Social Buzz)</label></div>
+      <div class="hint">Инфоповоды/тренды влияют на спрос.</div>
+    </div>
+
+    <div class="section">
+      <b>4) Модели (Models)</b>
+      <div class="row"><label><input name="model" type="radio" value="naive"> Naive — вчера = сегодня</label></div>
+      <div class="row"><label><input name="model" type="radio" value="ma" checked> Moving Average (MA)</label><span>k=<input id="ma_k" type="number" value="7" min="2" max="30"></span></div>
+      <div class="row"><label><input name="model" type="radio" value="snaive"> Seasonal Naive</label><span>m=<input id="s_m" type="number" value="7" min="2" max="30"></span></div>
+      <div class="row"><label><input name="model" type="radio" value="ses"> SES (Exp. Smoothing)</label><span>α=<input id="ses_a" type="number" step="0.05" value="0.3" min="0.05" max="0.95"></span></div>
+      <div class="row"><label><input name="model" type="radio" value="holt"> Holt (trend)</label><span>α=<input id="holt_a" type="number" step="0.05" value="0.4"> β=<input id="holt_b" type="number" step="0.05" value="0.2"></span></div>
+      <div class="row"><label><input name="model" type="radio" value="hw"> Holt–Winters</label><span>α=<input id="hw_a" type="number" step="0.05" value="0.3"> β=<input id="hw_b" type="number" step="0.05" value="0.1"> γ=<input id="hw_g" type="number" step="0.05" value="0.3"></span></div>
+      <div class="row"><label><input name="model" type="radio" value="arima"> ARIMA(0,1,1)</label></div>
+      <div class="row"><label><input name="model" type="radio" value="sarima"> SARIMA (0,1,1)x(0,1,1)m</label><span>m=<input id="sar_m" type="number" value="7" min="2" max="30"></span></div>
+      <div class="row"><label><input name="model" type="radio" value="lin"> ML: Linear (OLS)</label></div>
+      <div class="row"><label><input name="model" type="radio" value="tree"> ML: Tree-like (pseudo)</label></div>
+      <div class="row"><label><input name="model" type="radio" value="ens"> Ensemble (50/50 ML & HW)</label></div>
+      <div class="model-note">Подписи кратко поясняют различия (short differences explained).</div>
+    </div>
+
+    <div class="section">
+      <b>5) Риски (Risks)</b>
+      <div class="row"><label><input type="checkbox" id="risk_leak"> Data Leakage (предупреждение)</label></div>
+      <div class="row"><label><input type="checkbox" id="risk_drift"> Drift (дрейф будущего)</label></div>
+      <div class="row"><button id="btnRetrain">Retrain (переобучить)</button></div>
+      <div id="warnLeak" class="warnline" style="display:none">Внимание: избегаем утечки — признаки будущего не попадают в train (No future leakage).</div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="grid" style="padding:0">
+      <div class="foot" style="padding:8px 10px 0 10px">
+        <div class="legend">
+          <div class="lg"><span class="dot d2"></span> Actual (Факт)</div>
+          <div class="lg"><span class="dot d1"></span> Forecast p50</div>
+          <div class="lg"><span class="dot d3"></span> p10–p90</div>
+        </div>
+        <div class="toolbar">
+          <button id="btnReset">Reset</button>
+          <button id="btnCSV">Скачать CSV</button>
+        </div>
+      </div>
+      <svg id="chart" viewBox="0 0 1200 420" preserveAspectRatio="none" style="width:100%; height:420px; display:block; background:linear-gradient(180deg,#0f1520,#0e141b)"></svg>
+    </div>
+
+    <div class="kpi">
+      <div class="k"><b>MAPE (train)</b><big id="k_mape_tr">–</big></div>
+      <div class="k"><b>MAPE (val)</b><big id="k_mape_val">–</big></div>
+      <div class="k"><b>Bias (val)</b><big id="k_bias">–</big></div>
+      <div class="k"><b>FVA vs Naive</b><big id="k_fva">–</big></div>
+      <div class="k"><b>Champion</b><big id="k_champ">–</big><div class="tag" id="k_champ_val"></div></div>
+      <div class="k"><b>Challenger</b><big id="k_chal">–</big><div class="tag" id="k_chal_val"></div></div>
+    </div>
+
+    <div class="two">
+      <div class="grid">
+        <div class="bar-legend">Ошибка (Error), ниже — лучше (lower is better)</div>
+        <svg id="bars" viewBox="0 0 600 220" style="width:100%; height:220px; display:block"></svg>
+      </div>
+      <div class="grid">
+        <div id="explainTitle" style="margin-bottom:6px"><b>Объяснимость (Explainability)</b></div>
+        <div id="explainBox" style="max-height:200px; overflow:auto"></div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <b>Multi-horizon (weeks 1–12) — p50 / p10 / p90</b>
+      <div style="overflow:auto; max-height:260px">
+        <table id="mhTable"></table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ========================= Utilities ========================= //
+const rng = (()=>{ // deterministic-ish RNG so sliders feel stable per session
+  let s1=1234567, s2=8901234, s3=7777777; 
+  return ()=>{s1^=s1<<13; s1^=s1>>>17; s1^=s1<<5; const t=(s1+s2+s3)>>>0; s2=s1; s3=t; return (t>>>0)/4294967296}
+})();
+function randn(){ // Box-Muller
+  let u=0,v=0; while(u===0)u=rng(); while(v===0)v=rng(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)
+}
+function clamp(x,a,b){return Math.max(a,Math.min(b,x))}
+function mean(a){return a.reduce((s,x)=>s+x,0)/a.length}
+function std(a){const m=mean(a); return Math.sqrt(mean(a.map(x=>(x-m)**2)))}
+function sum(a){return a.reduce((s,x)=>s+x,0)}
+function rollingMean(a,k){const out=[], q=[]; let s=0; for(let i=0;i<a.length;i++){q.push(a[i]); s+=a[i]; if(q.length>k){s-=q.shift()} out.push(q.length<k? s/q.length : s/k)} return out}
+function range(n){return [...Array(n).keys()]}
+function copy(a){return a.slice(0)}
+function linspace(n, start=0){return range(n).map(i=>start+i)}
+function add(a,b){return a.map((x,i)=>x+b[i])}
+function mul(a,b){return a.map((x,i)=>x*b[i])}
+function scale(a,c){return a.map(x=>x*c)}
+function sigmoid(x){return 1/(1+Math.exp(-x))}
+
+// ========================= Data Generation ========================= //
+function genData(N_history=180, N_future=28, sku=0, drift=false){
+  // Parameters by SKU for variety
+  const baseArr=[120, 80, 150];
+  const trendArr=[0.03, 0.02, 0.04];
+  const bwArr=[2.8, 1.4, 2.2];
+  const bpArr=[40, 25, 30];
+  const bhArr=[20, 10, 14];
+  const bcArr=[120, 80, 100];
+  const bbArr=[18, 22, 16];
+  const kPrice=[1.0, 0.8, 0.9]; // price elasticity scaling
+
+  const base=baseArr[sku];
+  const trend=trendArr[sku];
+  const betaW=bwArr[sku], betaP=bpArr[sku], betaH=bhArr[sku], betaC=bcArr[sku], betaB=bbArr[sku];
+
+  const N = N_history + N_future;
+  const dates = linspace(N,0).map(i=>new Date(2025,0,1+i));
+  const doy = dates.map(d=>{const start=new Date(d.getFullYear(),0,0); const diff=(d-start); return Math.floor(diff/86400000)});
+  const dow = dates.map(d=>(d.getDay()+6)%7); // 0=Mon
+
+  // yearly temp sinus
+  const temp = doy.map(d=> 14 + 10*Math.sin(2*Math.PI*(d/365 - 0.25)) + 1.5*randn());
+  const cold = temp.map(t=> Math.max(0, 18 - t));
+
+  // weekly seasonality pattern
+  const weekly = dow.map(d=> ({0:8,1:4,2:2,3:0,4:3,5:10,6:14}[d] || 0));
+  // yearly gentle wave
+  const yearly = doy.map(d=> 6*Math.sin(2*Math.PI*d/365));
+  // price baseline and stochastic
+  let price = range(N).map(_=> 1 + (rng()*0.10 - 0.05));
+
+  // promo blocks 2-3 days every ~30-40 days
+  const promo = Array(N).fill(0);
+  for(let i=10;i<N_history;i+= Math.floor(28 + rng()*12)){
+    const len = 2 + Math.floor(rng()*2);
+    for(let j=0;j<len && (i+j)<N_history; j++){promo[i+j]=1; price[i+j]-=0.08 - 0.02*rng()} // temporary price drop
+  }
+
+  // holidays: Feb 14, Oct 31 (map if within our synthetic timeline)
+  const holiday = dates.map(d=> (d.getMonth()===1 && d.getDate()===14) || (d.getMonth()===9 && d.getDate()===31) ? 1:0);
+  // social buzz random bursts
+  const buzz = Array(N).fill(0);
+  for(let i=5;i<N_history;i+= Math.floor(20 + rng()*25)){
+    const len = 2 + Math.floor(rng()*3);
+    const amp = 0.5 + rng()*1.0;
+    for(let j=0;j<len && (i+j)<N_history; j++){buzz[i+j]=amp}
+  }
+
+  // base + components
+  const tIdx = range(N).map(i=>i);
+  let y = tIdx.map((t)=> base + weekly[t] + yearly[t] + trend*t + betaW*cold[t] + betaP*promo[t] + betaH*holiday[t] + betaC*( (price[t]<1? (1-price[t]) : -(price[t]-1)) ) + betaB*buzz[t] + 20*(promo[t]*buzz[t]) + 12*(promo[t]*(1-price[t])) );
+  // multiplicative noise 10-15%
+  y = y.map(val => val * (1 + (0.10+0.05*rng())*(randn()*0.4)));
+  // drift future if requested
+  if(drift){
+    for(let i=N_history;i<N;i++){
+      y[i] *= (1 + 0.20 * (i-N_history)/N_future); // up to +20% drift over horizon
+    }
+  }
+
+  const trainEnd = Math.floor(0.8*N_history);
+  const valEnd = N_history;
+
+  return {N_history, N_future, dates, y, dow, doy, temp, cold, weekly, yearly, price, promo, holiday, buzz, trainEnd, valEnd};
+}
+
+// Dirty data toggles
+function applyPrep(data, opts){
+  const y = data.y.slice();
+  // OOS losses: reduce random 6 days in history by 40%
+  if(opts.oos){
+    for(let k=0;k<6;k++){
+      const i = Math.floor(rng() * (data.N_history-7)) + 3;
+      y[i] *= 0.6;
+    }
+  }
+  // If Promo feature is off and de-promo on: shrink promo spikes in history
+  if(opts.depromo && !opts.f_promo){
+    for(let i=0;i<data.N_history;i++) if(data.promo[i]>0) y[i] = y[i] * 0.8;
+  }
+  // create gaps (simulate missing) and impute if requested
+  const missIdx=[];
+  for(let k=0;k<3;k++){ const i=Math.floor(rng()*(data.N_history-10))+5; missIdx.push(i); y[i]=NaN; }
+  if(opts.impute){
+    for(const i of missIdx){
+      // simple 7-day neighborhood mean
+      const a=[], from=Math.max(0,i-7), to=Math.min(data.N_history-1,i+7);
+      for(let j=from;j<=to;j++) if(!Number.isNaN(y[j])) a.push(y[j]);
+      y[i] = a.length? mean(a) : y[i-1];
+    }
+  }
+  return y;
+}
+
+// ========================= Features ========================= //
+function buildFeatures(data, include, forRange){
+  // Build matrix X and feature names. Always include DoW one-hot & year sin/cos for Linear/Tree.
+  // forRange: {start, end} indices (exclusive end)
+  const {dow,doy,cold,price,promo,holiday,buzz} = data;
+  const start=forRange.start, end=forRange.end;
+  const rows=end-start;
+  const X=[]; const names=[];
+  // Bias term
+  names.push('bias');
+  // DoW one-hot 7 (Mon..Sun)
+  const dowNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  for(let d=0; d<7; d++) names.push('DoW_'+dowNames[d]);
+  // Seasonality: sin/cos of year + trend
+  names.push('Year_sin','Year_cos','Trend');
+  // Optional features
+  if(include.weather) names.push('ColdIdx');
+  if(include.price) names.push('Price');
+  if(include.promo) names.push('Promo');
+  if(include.holiday) names.push('Holiday');
+  if(include.buzz) names.push('Buzz');
+  // Nonlinear terms for Tree-like
+  if(include.tree){
+    if(include.promo && include.buzz) names.push('Promo*Buzz');
+    if(include.promo && include.price) names.push('Promo*Discount');
+    // simple squares
+    if(include.weather) names.push('ColdIdx^2');
+    if(include.buzz) names.push('Buzz^2');
+  }
+
+  for(let i=start;i<end;i++){
+    const row=[1];
+    for(let d=0; d<7; d++) row.push(dow[i]===d?1:0);
+    const ys = Math.sin(2*Math.PI*(doy[i]/365)), yc=Math.cos(2*Math.PI*(doy[i]/365));
+    row.push(ys, yc, i);
+    if(include.weather) row.push(cold[i]);
+    if(include.price) row.push(price[i]);
+    if(include.promo) row.push(promo[i]);
+    if(include.holiday) row.push(holiday[i]);
+    if(include.buzz) row.push(buzz[i]);
+    if(include.tree){
+      if(include.promo && include.buzz) row.push(promo[i]*buzz[i]);
+      if(include.promo && include.price) row.push(promo[i]*(1-price[i]));
+      if(include.weather) row.push(cold[i]*cold[i]);
+      if(include.buzz) row.push(buzz[i]*buzz[i]);
+    }
+    X.push(row);
+  }
+  return {X, names};
+}
+
+// Linear algebra helpers for OLS (ridge)
+function transpose(A){const m=A.length, n=A[0].length; const AT=Array.from({length:n},()=>Array(m).fill(0)); for(let i=0;i<m;i++)for(let j=0;j<n;j++)AT[j][i]=A[i][j]; return AT}
+function matmul(A,B){const m=A.length,n=A[0].length,p=B[0].length; const C=Array.from({length:m},()=>Array(p).fill(0)); for(let i=0;i<m;i++)for(let k=0;k<n;k++){const aik=A[i][k]; for(let j=0;j<p;j++) C[i][j]+=aik*B[k][j]} return C}
+function invSymPos(A){ // simple Gauss-Jordan for small dims; assumes symmetric positive definite
+  const n=A.length; const I=Array.from({length:n},(_,i)=>Array.from({length:n},(_,j)=> i===j?1:0));
+  const M=A.map(r=>r.slice());
+  for(let i=0;i<n;i++){
+    let pivot=M[i][i]; if(Math.abs(pivot)<1e-8){ // find swap
+      for(let r=i+1;r<n;r++) if(Math.abs(M[r][i])>Math.abs(pivot)){const tmp=M[i];M[i]=M[r];M[r]=tmp; const tmp2=I[i];I[i]=I[r];I[r]=tmp2; pivot=M[i][i]; break}
+    }
+    const invp=1/pivot; for(let j=0;j<n;j++){M[i][j]*=invp; I[i][j]*=invp}
+    for(let r=0;r<n;r++) if(r!==i){ const f=M[r][i]; if(Math.abs(f)>1e-12){ for(let j=0;j<n;j++){M[r][j]-=f*M[i][j]; I[r][j]-=f*I[i][j]} } }
+  }
+  return I;
+}
+function fitOLS(X,y, ridge=1e-3){
+  const XT=transpose(X); const XTX=matmul(XT,X);
+  for(let i=0;i<XTX.length;i++) XTX[i][i]+=ridge; // ridge
+  const XTy = matmul(XT, y.map(v=>[v]));
+  const beta = matmul(invSymPos(XTX), XTy).map(r=>r[0]);
+  return beta;
+}
+function predictX(X,b){return X.map(r=> r.reduce((s,x,i)=>s+x*b[i],0))}
+
+// ========================= Classical Models ========================= //
+function forecastNaive(y, start, end){ // uses last observed each step
+  const out=[]; for(let i=start;i<end;i++){ out.push(y[i-1]) } return out;
+}
+function forecastMA(y, start, end, k){
+  const out=[]; for(let i=start;i<end;i++){ const from=Math.max(0,i-k); const arr=y.slice(from,i).filter(v=>!Number.isNaN(v)); out.push(arr.length? mean(arr): y[i-1]) } return out;
+}
+function forecastSeasonalNaive(y, start, end, m){
+  const out=[]; for(let i=start;i<end;i++){ const j=i-m; out.push(j>=0? y[j] : y[i-1]) } return out;
+}
+function forecastSES(y, start, end, a){
+  let s=y[0]; for(let i=1;i<start;i++){ s=a*y[i] + (1-a)*s }
+  const out=[]; for(let i=start;i<end;i++){ s=a*y[i-1] + (1-a)*s; out.push(s) } return out;
+}
+function forecastHolt(y, start, end, a,b){
+  let l=y[0], t=y[1]-y[0]; for(let i=1;i<start;i++){ const prevl=l; l=a*y[i] + (1-a)*(l + t); t=b*(l - prevl) + (1-b)*t; }
+  const out=[]; for(let i=start;i<end;i++){ const h=1; const f=l + h*t; // step ahead
+    // update with actual for rolling origin
+    const prevl=l; l=a*y[i] + (1-a)*(l + t); t=b*(l - prevl) + (1-b)*t; out.push(f) }
+  return out;
+}
+function forecastHW_Additive(y, start, end, a,b,g, m=7){
+  let l=y[0], t=y[1]-y[0]; const s=Array(m).fill(0);
+  // init seasonals naive
+  for(let i=0;i<m;i++) s[i]= (y[i] - l);
+  for(let i=1;i<start;i++){
+    const si=s[(i-1)%m]; const prevl=l; l= a*(y[i]-si) + (1-a)*(l+t); t= b*(l-prevl) + (1-b)*t; s[i%m] = g*(y[i]-l) + (1-g)*si;
+  }
+  const out=[]; for(let i=start;i<end;i++){
+    const f=l + t + s[(i-1)%m]; // 1-step
+    const si=s[(i-1)%m]; const prevl=l; l= a*(y[i]-si) + (1-a)*(l+t); t= b*(l-prevl) + (1-b)*t; s[i%m] = g*(y[i]-l) + (1-g)*si; out.push(f)
+  }
+  return out;
+}
+
+// ========================= ARIMA-lite ========================= //
+function gridThetaMA1(x){ // fit MA(1) on differenced series via SSE grid
+  let bestT=0, bestS=Infinity;
+  for(let th=-0.9; th<=0.9; th+=0.02){
+    let e_prev=0, sse=0;
+    for(let i=0;i<x.length;i++){
+      const xhat = th*e_prev; const e = x[i]-xhat; sse += e*e; e_prev = e;
+    }
+    if(sse<bestS){bestS=sse; bestT=th}
+  }
+  return bestT;
+}
+function forecastARIMA011(y, start, end){
+  // difference once on [0..end-1]
+  const d=[]; for(let i=1;i<end;i++) d.push(y[i]-y[i-1]);
+  const th = gridThetaMA1(d.slice(0,start-1)); // fit on train part of d
+  // in-sample rolling forecast for indices start..end-1 (aligned)
+  const out=[]; let e_prev=0; for(let i=1;i<end;i++){
+    const xhat = th*e_prev; const e = d[i-1]-xhat; if(i>=start) out.push(y[i-1] + xhat); e_prev=e;
+  }
+  return out;
+}
+function forecastSARIMA011x011(y, start, end, m){
+  // seasonal diff first
+  const sd=[]; for(let i=m;i<end;i++) sd.push(y[i]-y[i-m]);
+  const th = gridThetaMA1(sd.slice(0,start-m));
+  const out=[]; let e_prev=0; for(let i=m;i<end;i++){
+    const xhat = th*e_prev; const e = sd[i-m]-xhat; if(i>=start){ out.push(y[i-m] + xhat); } e_prev=e;
+  }
+  return out;
+}
+
+// ========================= ML models ========================= //
+function mlLinear(data, yHist, start, end, include){
+  const inc = {weather:include.weather, price:include.price, promo:include.promo, holiday:include.holiday, buzz:include.buzz, tree:false};
+  const Xtr=buildFeatures(data, inc, {start:0,end:start});
+  const Xva=buildFeatures(data, inc, {start:start,end:end});
+  const beta = fitOLS(Xtr.X, yHist.slice(0,start));
+  const pva = predictX(Xva.X, beta);
+  return {p:pva, beta:beta, names:Xtr.names};
+}
+function mlTree(data, yHist, start, end, include){
+  const inc = {weather:include.weather, price:include.price, promo:include.promo, holiday:include.holiday, buzz:include.buzz, tree:true};
+  const Xtr=buildFeatures(data, inc, {start:0,end:start});
+  const Xva=buildFeatures(data, inc, {start:start,end:end});
+  const beta = fitOLS(Xtr.X, yHist.slice(0,start), 1e-2);
+  const pva = predictX(Xva.X, beta);
+  return {p:pva, beta:beta, names:Xtr.names};
+}
+
+// Forecast future for ML using same features (no leakage)
+function mlPredictFuture(data, startFut, endFut, beta, include, tree){
+  const inc = {weather:include.weather, price:include.price, promo:include.promo, holiday:include.holiday, buzz:include.buzz, tree:!!tree};
+  const Xfu = buildFeatures(data, inc, {start:startFut, end:endFut});
+  return predictX(Xfu.X, beta);
+}
+
+// ========================= Metrics ========================= //
+function MAPE(y, p){ const a=[]; for(let i=0;i<p.length;i++){ const denom=Math.max(1e-6, Math.abs(y[i])); a.push(Math.abs(y[i]-p[i])/denom)} return 100*mean(a) }
+function Bias(y,p){ const a=[]; for(let i=0;i<p.length;i++) a.push(p[i]-y[i]); return mean(a) }
+function RMSE(y,p){ const a=[]; for(let i=0;i<p.length;i++){ const e=y[i]-p[i]; a.push(e*e) } return Math.sqrt(mean(a)) }
+function residualStd(y,p){ const r=[]; for(let i=0;i<p.length;i++) r.push(y[i]-p[i]); return std(r) }
+
+// ========================= Drawing (SVG) ========================= //
+function drawChart(svg, actual, p50, p10, p90, splitIdx){
+  const W=1200, H=420, L=50, R=10, T=10, B=30;
+  svg.innerHTML='';
+  const n = p50.length;
+  const xStep=(W-L-R)/Math.max(1,(n-1));
+
+  // Collect only finite numbers for scaling to avoid NaN breaking the chart (Tilda preview had NaNs in future actuals)
+  const allVals = [].concat(actual, p10, p90).filter(v=>Number.isFinite(v));
+  const min = Math.min(...allVals);
+  const max = Math.max(...allVals);
+  const scaleY=(v)=> T + (H-T-B)*(1-(v-min)/(max-min+1e-6));
+
+  // Grid
+  for(let g=0; g<6; g++){
+    const y = T + g*(H-T-B)/5; const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('x1',L); line.setAttribute('x2',W-R); line.setAttribute('y1',y); line.setAttribute('y2',y); line.setAttribute('stroke','var(--grid)'); line.setAttribute('stroke-width','1'); svg.appendChild(line);
+  }
+
+  // Helper: path that skips NaNs (breaks the line)
+  function pathFrom(arr){
+    let d=''; let penUp=true;
+    for(let i=0;i<arr.length;i++){
+      const v = arr[i];
+      const x = L + i*xStep;
+      if(Number.isFinite(v)){
+        const y = scaleY(v);
+        d += (penUp? 'M':'L') + x + ',' + y + ' ';
+        penUp=false;
+      } else {
+        penUp=true;
+      }
+    }
+    return d.trim();
+  }
+
+  // Band p10–p90 (construct as two paths and fill)
+  const dTop = pathFrom(p90);
+  const dBot = pathFrom(p10);
+  if(dTop && dBot){
+    // Build polygon by sampling points explicitly (safer with potential gaps)
+    const ptsTop = [];
+    const ptsBot = [];
+    for(let i=0;i<n;i++){
+      if(Number.isFinite(p90[i])) ptsTop.push([L+i*xStep, scaleY(p90[i])]);
+    }
+    for(let i=n-1;i>=0;i--){
+      if(Number.isFinite(p10[i])) ptsBot.push([L+i*xStep, scaleY(p10[i])]);
+    }
+    const pathBand=document.createElementNS('http://www.w3.org/2000/svg','path');
+    const d = ptsTop.reduce((s,[x,y],idx)=> s + (idx? ' L ':'M') + x + ',' + y, '') +
+              ptsBot.reduce((s,[x,y])=> s + ' L ' + x + ',' + y, '') + ' Z';
+    pathBand.setAttribute('d', d);
+    pathBand.setAttribute('fill','var(--band)');
+    svg.appendChild(pathBand);
+  }
+
+  // Forecast p50
+  const pPath=document.createElementNS('http://www.w3.org/2000/svg','path'); pPath.setAttribute('d', pathFrom(p50)); pPath.setAttribute('stroke','var(--line1)'); pPath.setAttribute('stroke-width','2'); pPath.setAttribute('fill','none'); svg.appendChild(pPath);
+  // Actual: may contain NaN for future → safely skipped
+  const aPath=document.createElementNS('http://www.w3.org/2000/svg','path'); aPath.setAttribute('d', pathFrom(actual)); aPath.setAttribute('stroke','var(--line2)'); aPath.setAttribute('stroke-width','2'); aPath.setAttribute('fill','none'); svg.appendChild(aPath);
+
+  // Split line at validation/future boundary
+  const sx=L+splitIdx*xStep; const sl=document.createElementNS('http://www.w3.org/2000/svg','line'); sl.setAttribute('x1',sx); sl.setAttribute('x2',sx); sl.setAttribute('y1',T); sl.setAttribute('y2',H-B); sl.setAttribute('stroke','#344b67'); sl.setAttribute('stroke-dasharray','4 4'); svg.appendChild(sl);
+}
+
+function drawBars(svg, items){ // items: [{name,value}]
+  const W=600,H=220,L=40,R=10,T=20,B=30; svg.innerHTML='';
+  const max = Math.max(...items.map(d=>d.value))*1.1;
+  const bw = (W-L-R)/items.length - 14; const x0=L+10;
+  items.forEach((d,i)=>{
+    const h = (H-T-B)*(d.value/max);
+    const x = x0 + i*(bw+14), y=H-B-h;
+    const rect=document.createElementNS('http://www.w3.org/2000/svg','rect'); rect.setAttribute('x',x); rect.setAttribute('y',y); rect.setAttribute('width',bw); rect.setAttribute('height',h); rect.setAttribute('fill','var(--bar)'); svg.appendChild(rect);
+    const tx=document.createElementNS('http://www.w3.org/2000/svg','text'); tx.setAttribute('x',x+bw/2); tx.setAttribute('y',H-8); tx.setAttribute('text-anchor','middle'); tx.setAttribute('fill','var(--sub)'); tx.setAttribute('font-size','12'); tx.textContent=d.name; svg.appendChild(tx);
+    const tv=document.createElementNS('http://www.w3.org/2000/svg','text'); tv.setAttribute('x',x+bw/2); tv.setAttribute('y',y-6); tv.setAttribute('text-anchor','middle'); tv.setAttribute('fill','var(--text)'); tv.setAttribute('font-size','12'); tv.textContent=d.value.toFixed(1); svg.appendChild(tv);
+  });
+}
+
+function fillExplain(box, modelKey, context){
+  if(modelKey==='lin' || modelKey==='tree'){
+    const {beta,names} = context;
+    const rows = names.map((n,i)=>({n, w:Math.abs(beta[i])})).sort((a,b)=>b.w-a.w).slice(0,15);
+    box.innerHTML='<table><tr><th>Фича (Feature)</th><th>|β|</th></tr>' + rows.map(r=>`<tr><td style="text-align:left">${r.n}</td><td>${r.w.toFixed(3)}</td></tr>`).join('') + '</table>';
+  } else if(modelKey==='ens' || modelKey==='tree_perm'){
+    const {perm} = context; // [{name,delta}]
+    box.innerHTML='<table><tr><th>Фича</th><th>ΔMAPE при перемешивании</th></tr>' + perm.map(r=>`<tr><td style="text-align:left">${r.name}</td><td>${r.delta.toFixed(2)} п.п.</td></tr>`).join('') + '</table>';
+  } else {
+    box.innerHTML='<div class="tag">Выберите ML-модель, чтобы увидеть важности (Select an ML model to see importances).</div>';
+  }
+}
+
+function fillTable(tbl, weeks){ // weeks: [{w, p50,p10,p90}]
+  tbl.innerHTML = '<tr><th>Неделя (Week)</th><th>p50</th><th>p10</th><th>p90</th></tr>' + weeks.map(r=>`<tr><td>W${r.w}</td><td>${r.p50.toFixed(0)}</td><td>${r.p10.toFixed(0)}</td><td>${r.p90.toFixed(0)}</td></tr>`).join('');
+}
+
+// ========================= Orchestration ========================= //
+const els = {
+  hWeeks: document.getElementById('hWeeks'), hWeeksVal: document.getElementById('hWeeksVal'),
+  histWeeks: document.getElementById('histWeeks'), histWeeksVal: document.getElementById('histWeeksVal'), skuSelect: document.getElementById('skuSelect'),
+  prep_oos: document.getElementById('prep_oos'), prep_depromo: document.getElementById('prep_depromo'), prep_impute: document.getElementById('prep_impute'),
+  f_dow: document.getElementById('f_dow'), f_season: document.getElementById('f_season'), f_weather: document.getElementById('f_weather'), f_price: document.getElementById('f_price'), f_promo: document.getElementById('f_promo'), f_holiday: document.getElementById('f_holiday'), f_buzz: document.getElementById('f_buzz'),
+  ma_k: document.getElementById('ma_k'), s_m: document.getElementById('s_m'), ses_a: document.getElementById('ses_a'), holt_a: document.getElementById('holt_a'), holt_b: document.getElementById('holt_b'), hw_a: document.getElementById('hw_a'), hw_b: document.getElementById('hw_b'), hw_g: document.getElementById('hw_g'), sar_m: document.getElementById('sar_m'),
+  warnLeak: document.getElementById('warnLeak'), risk_leak: document.getElementById('risk_leak'), risk_drift: document.getElementById('risk_drift'), btnRetrain: document.getElementById('btnRetrain'),
+  chart: document.getElementById('chart'), bars: document.getElementById('bars'), mhTable: document.getElementById('mhTable'), explainBox: document.getElementById('explainBox'), explainTitle: document.getElementById('explainTitle'),
+  btnReset: document.getElementById('btnReset'), btnCSV: document.getElementById('btnCSV'),
+  k_mape_tr: document.getElementById('k_mape_tr'), k_mape_val: document.getElementById('k_mape_val'), k_bias: document.getElementById('k_bias'), k_fva: document.getElementById('k_fva'), k_champ: document.getElementById('k_champ'), k_champ_val: document.getElementById('k_champ_val'), k_chal: document.getElementById('k_chal'), k_chal_val: document.getElementById('k_chal_val'),
+};
+
+let STATE = { data: null, prepY: null, model:'ma', beta:null, names:null, lastFut:null };
+
+function buildAndRender(retrain=false){
+  const weeksH = parseInt(els.hWeeks.value,10); els.hWeeksVal.textContent = weeksH;
+  const weeksHist = parseInt(els.histWeeks.value,10); els.histWeeksVal.textContent = weeksHist;
+  const N_history = weeksHist*7, N_future = weeksH*7;
+  if(retrain && STATE.data){ // keep same seed-ish but regenerate future with drift if enabled
+    STATE.data = genData(N_history, N_future, +els.skuSelect.value, els.risk_drift.checked);
+  } else {
+    STATE.data = genData(N_history, N_future, +els.skuSelect.value, els.risk_drift.checked);
+  }
+  els.warnLeak.style.display = els.risk_leak.checked? 'block':'none';
+
+  const include = { weather:els.f_weather.checked, price:els.f_price.checked, promo:els.f_promo.checked, holiday:els.f_holiday.checked, buzz:els.f_buzz.checked };
+  const prepOpts = { oos:els.prep_oos.checked, depromo:els.prep_depromo.checked, impute:els.prep_impute.checked, f_promo:els.f_promo.checked };
+
+  const yPrep = applyPrep(STATE.data, prepOpts); STATE.prepY=yPrep;
+
+  const startTr = STATE.data.trainEnd, endVa=STATE.data.valEnd; // validation window: [trainEnd..valEnd)
+
+  // Choose model
+  const model = document.querySelector('input[name="model"]:checked').value; STATE.model=model;
+
+  let pVal=[], pFut=[], bandStd=0, explainCtx=null;
+  // Helper to compute p10/p90 band & chart arrays
+  function bandFrom(p){ const s=bandStd; return {p10:p.map(x=>x-1.28*s), p90:p.map(x=>x+1.28*s)} }
+
+  // Validation predictions by model
+  switch(model){
+    case 'naive': pVal = forecastNaive(yPrep, startTr, endVa); break;
+    case 'ma': pVal = forecastMA(yPrep, startTr, endVa, parseInt(els.ma_k.value,10)||7); break;
+    case 'snaive': pVal = forecastSeasonalNaive(yPrep, startTr, endVa, parseInt(els.s_m.value,10)||7); break;
+    case 'ses': pVal = forecastSES(yPrep, startTr, endVa, parseFloat(els.ses_a.value)||0.3); break;
+    case 'holt': pVal = forecastHolt(yPrep, startTr, endVa, parseFloat(els.holt_a.value)||0.4, parseFloat(els.holt_b.value)||0.2); break;
+    case 'hw': pVal = forecastHW_Additive(yPrep, startTr, endVa, parseFloat(els.hw_a.value)||0.3, parseFloat(els.hw_b.value)||0.1, parseFloat(els.hw_g.value)||0.3, 7); break;
+    case 'arima': pVal = forecastARIMA011(yPrep, startTr, endVa); break;
+    case 'sarima': pVal = forecastSARIMA011x011(yPrep, startTr, endVa, parseInt(els.sar_m.value,10)||7); break;
+    case 'lin': {
+      const r= mlLinear(STATE.data, yPrep, startTr, endVa, include); pVal=r.p; STATE.beta=r.beta; STATE.names=r.names; explainCtx={beta:r.beta, names:r.names}; break;
+    }
+    case 'tree': {
+      const r= mlTree(STATE.data, yPrep, startTr, endVa, include); pVal=r.p; STATE.beta=r.beta; STATE.names=r.names; explainCtx={beta:r.beta, names:r.names}; break;
+    }
+    case 'ens': {
+      // 50/50 Linear & HW
+      const rLin=mlLinear(STATE.data, yPrep, startTr, endVa, include);
+      const rHW = forecastHW_Additive(yPrep, startTr, endVa, 0.3,0.1,0.3,7);
+      pVal = rLin.p.map((v,i)=>0.5*v + 0.5*rHW[i]); STATE.beta=rLin.beta; STATE.names=rLin.names; explainCtx={beta:rLin.beta, names:rLin.names}; break;
+    }
+  }
+
+  // Train predictions (for MAPE train) using rolling origin from 1..trainEnd
+  let pTrain=[]; switch(model){
+    case 'naive': pTrain = forecastNaive(yPrep, 1, startTr); break;
+    case 'ma': pTrain = forecastMA(yPrep, 1, startTr, parseInt(els.ma_k.value,10)||7); break;
+    case 'snaive': pTrain = forecastSeasonalNaive(yPrep, 1, startTr, parseInt(els.s_m.value,10)||7); break;
+    case 'ses': pTrain = forecastSES(yPrep, 1, startTr, parseFloat(els.ses_a.value)||0.3); break;
+    case 'holt': pTrain = forecastHolt(yPrep, 1, startTr, parseFloat(els.holt_a.value)||0.4, parseFloat(els.holt_b.value)||0.2); break;
+    case 'hw': pTrain = forecastHW_Additive(yPrep, 1, startTr, parseFloat(els.hw_a.value)||0.3, parseFloat(els.hw_b.value)||0.1, parseFloat(els.hw_g.value)||0.3, 7); break;
+    case 'arima': pTrain = forecastARIMA011(yPrep, 1, startTr); break;
+    case 'sarima': pTrain = forecastSARIMA011x011(yPrep, 1, startTr, parseInt(els.sar_m.value,10)||7); break;
+    case 'lin': {
+      const r= mlLinear(STATE.data, yPrep, startTr, endVa, include); // already fitted
+      const Xtr=buildFeatures(STATE.data, {weather:include.weather, price:include.price, promo:include.promo, holiday:include.holiday, buzz:include.buzz, tree:false}, {start:1,end:startTr});
+      pTrain = predictX(Xtr.X, r.beta); break;
+    }
+    case 'tree': {
+      const r= mlTree(STATE.data, yPrep, startTr, endVa, include); const Xtr=buildFeatures(STATE.data, {weather:include.weather, price:include.price, promo:include.promo, holiday:include.holiday, buzz:include.buzz, tree:true}, {start:1,end:startTr}); pTrain = predictX(Xtr.X, r.beta); break;
+    }
+    case 'ens': {
+      const rLin=mlLinear(STATE.data, yPrep, startTr, endVa, include); const Xtr=buildFeatures(STATE.data, {weather:include.weather, price:include.price, promo:include.promo, holiday:include.holiday, buzz:include.buzz, tree:false}, {start:1,end:startTr}); const pTrLin=predictX(Xtr.X, rLin.beta); const pTrHW=forecastHW_Additive(yPrep, 1, startTr, 0.3,0.1,0.3,7); pTrain=pTrLin.map((v,i)=>0.5*v+0.5*pTrHW[i]); break;
+    }
+  }
+
+  const yTrain = yPrep.slice(1,startTr); const yVal = yPrep.slice(startTr,endVa);
+  const mapeTr = MAPE(yTrain, pTrain);
+  const mapeVal = MAPE(yVal, pVal);
+  const biasVal = Bias(yVal, pVal);
+
+  // baselines for bars
+  const baseNaive = MAPE(yVal, forecastNaive(yPrep, startTr, endVa));
+  const baseMA7 = MAPE(yVal, forecastMA(yPrep, startTr, endVa, 7));
+  const baseES03 = MAPE(yVal, forecastSES(yPrep, startTr, endVa, 0.3));
+  const fva = baseNaive - mapeVal; // pp
+
+  // residual std for band
+  bandStd = residualStd(yVal, pVal);
+
+  // Future forecast length N_future
+  const startFut=endVa, endFut=endVa+STATE.data.N_future;
+  let pF=[];
+  switch(model){
+    case 'naive': pF = forecastNaive(yPrep, startFut, endFut); break;
+    case 'ma': pF = forecastMA(yPrep, startFut, endFut, parseInt(els.ma_k.value,10)||7); break;
+    case 'snaive': pF = forecastSeasonalNaive(yPrep, startFut, endFut, parseInt(els.s_m.value,10)||7); break;
+    case 'ses': pF = forecastSES(yPrep, startFut, endFut, parseFloat(els.ses_a.value)||0.3); break;
+    case 'holt': pF = forecastHolt(yPrep, startFut, endFut, parseFloat(els.holt_a.value)||0.4, parseFloat(els.holt_b.value)||0.2); break;
+    case 'hw': pF = forecastHW_Additive(yPrep, startFut, endFut, parseFloat(els.hw_a.value)||0.3, parseFloat(els.hw_b.value)||0.1, parseFloat(els.hw_g.value)||0.3, 7); break;
+    case 'arima': pF = forecastARIMA011(yPrep, startFut, endFut); break;
+    case 'sarima': pF = forecastSARIMA011x011(yPrep, startFut, endFut, parseInt(els.sar_m.value,10)||7); break;
+    case 'lin': {
+      const r= mlLinear(STATE.data, yPrep, startTr, endVa, include); pF = mlPredictFuture(STATE.data, startFut, endFut, r.beta, include, false); explainCtx={beta:r.beta, names:r.names}; break;
+    }
+    case 'tree': {
+      const r= mlTree(STATE.data, yPrep, startTr, endVa, include); pF = mlPredictFuture(STATE.data, startFut, endFut, r.beta, include, true); explainCtx={beta:r.beta, names:r.names}; break;
+    }
+    case 'ens': {
+      const rLin= mlLinear(STATE.data, yPrep, startTr, endVa, include); const pFH= forecastHW_Additive(yPrep, startFut, endFut, 0.3,0.1,0.3,7); const pFL= mlPredictFuture(STATE.data, startFut, endFut, rLin.beta, include, false); pF = pFL.map((v,i)=>0.5*v+0.5*pFH[i]); explainCtx={beta:rLin.beta, names:rLin.names}; break;
+    }
+  }
+  STATE.lastFut = pF.slice();
+
+  const pAll = pTrain.concat(pVal, pF);
+  const aAll = yPrep.slice(1,startTr).concat(yVal, STATE.data.y.slice(endVa, endFut)); // note: show true actual for future if generated
+  // But to mimic real life, we show actual only up to endVa; after that we keep NaN for actual future
+  const actualAll = yPrep.slice(0,endVa).concat(Array(STATE.data.N_future).fill(NaN));
+  const p50 = [yPrep[0], ...pTrain, ...pVal, ...pF];
+  const band = bandFrom(p50.map((v,i)=> (i<endVa? v : p50[i])));
+
+  drawChart(els.chart, yPrep.slice(0,endVa).concat(pF.map(_=>NaN)), p50, band.p10, band.p90, endVa);
+
+  // KPIs
+  els.k_mape_tr.textContent = mapeTr.toFixed(1)+'%';
+  els.k_mape_val.textContent = mapeVal.toFixed(1)+'%';
+  els.k_bias.textContent = biasVal.toFixed(2);
+  els.k_fva.textContent = (fva).toFixed(1)+' п.п.';
+
+  // Bars
+  drawBars(els.bars,[
+    {name:'Selected', value:mapeVal},
+    {name:'Naive', value:baseNaive},
+    {name:'MA7', value:baseMA7},
+    {name:'ES.3', value:baseES03},
+  ]);
+
+  // Champion/Challenger among a small pool
+  const pool=[
+    {n:'Naive', v:baseNaive},
+    {n:'MA7', v:baseMA7},
+    {n:'ES(0.3)', v:baseES03},
+    {n:'HW(0.3/0.1/0.3)', v:MAPE(yVal, forecastHW_Additive(yPrep, startTr, endVa, 0.3,0.1,0.3,7))},
+    {n:'ARIMA011', v:MAPE(yVal, forecastARIMA011(yPrep, startTr, endVa))},
+    {n:'Linear', v:MAPE(yVal, mlLinear(STATE.data, yPrep, startTr, endVa, include).p)},
+  ];
+  pool.sort((a,b)=>a.v-b.v);
+  els.k_champ.textContent = pool[0].n; els.k_champ_val.textContent = pool[0].v.toFixed(1)+'% (MAPE val)';
+  els.k_chal.textContent = pool[1].n; els.k_chal_val.textContent = pool[1].v.toFixed(1)+'%';
+
+  // Explainability
+  if(model==='tree' || model==='ens'){
+    // permutation importance on validation for included features only
+    const inc = { weather:els.f_weather.checked, price:els.f_price.checked, promo:els.f_promo.checked, holiday:els.f_holiday.checked, buzz:els.f_buzz.checked };
+    const baseMAPE = mapeVal; const items=[];
+    const feats = [];
+    if(inc.weather) feats.push('ColdIdx'); if(inc.price) feats.push('Price'); if(inc.promo) feats.push('Promo'); if(inc.holiday) feats.push('Holiday'); if(inc.buzz) feats.push('Buzz');
+    // Build val features matrix used by the model
+    const treeFlag = (model==='tree') || (model==='ens');
+    const incAll = {weather:inc.weather, price:inc.price, promo:inc.promo, holiday:inc.holiday, buzz:inc.buzz, tree: treeFlag};
+    const Xval = buildFeatures(STATE.data, incAll, {start:startTr,end:endVa}).X;
+    for(let f of feats){
+      const j = STATE.names.indexOf(f); if(j<0) continue;
+      const Xsh = Xval.map(r=>r.slice());
+      // shuffle column j
+      const col = Xsh.map(r=>r[j]); for(let i=col.length-1;i>0;i--){ const k=Math.floor(rng()*(i+1)); const tmp=col[i]; col[i]=col[k]; col[k]=tmp }
+      for(let i=0;i<Xsh.length;i++) Xsh[i][j]=col[i];
+      const psh = predictX(Xsh, STATE.beta);
+      const dMAPE = MAPE(yVal, psh) - baseMAPE;
+      items.push({name:f, delta:dMAPE});
+    }
+    items.sort((a,b)=>b.delta-a.delta);
+    fillExplain(els.explainBox, 'tree_perm', {perm:items});
+  } else {
+    fillExplain(els.explainBox, model, explainCtx||{});
+  }
+
+  // Multi-horizon weekly table (sum by weeks of future forecasts & bands)
+  const weeks=[]; for(let w=0; w<Math.min(12, STATE.data.N_future/7); w++){
+    const seg = pF.slice(w*7, (w+1)*7); const p50w=sum(seg);
+    const seg10 = seg.map(v=>v-1.28*bandStd), p10w=sum(seg10);
+    const seg90 = seg.map(v=>v+1.28*bandStd), p90w=sum(seg90);
+    weeks.push({w:w+1, p50:p50w, p10:p10w, p90:p90w});
+  }
+  fillTable(els.mhTable, weeks);
+
+  // CSV button
+  els.btnCSV.onclick = ()=>{
+    const lines=['date,phase,actual,p50,p10,p90'];
+    for(let i=0;i<STATE.data.valEnd;i++){
+      const date = STATE.data.dates[i].toISOString().slice(0,10);
+      const p50i = i<1? '': (i<1+startTr? pTrain[i-1] : i<1+endVa? pVal[i-1-startTr] : '');
+      const phase = i<startTr? 'train' : 'validation';
+      const band = i<1? {p10:'',p90:''} : {p10:(p50i-1.28*bandStd), p90:(p50i+1.28*bandStd)};
+      lines.push(`${date},${phase},${STATE.prepY[i]??''},${p50i??''},${band.p10??''},${band.p90??''}`);
+    }
+    for(let i=STATE.data.valEnd;i<STATE.data.valEnd+STATE.data.N_future;i++){
+      const date = STATE.data.dates[i].toISOString().slice(0,10);
+      const j=i-STATE.data.valEnd; const p50i=pF[j]; const p10=p50i-1.28*bandStd, p90=p50i+1.28*bandStd;
+      lines.push(`${date},future,,${p50i},${p10},${p90}`);
+    }
+    const blob=new Blob([lines.join('\n')],{type:'text/csv'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='forecast_validation_future.csv'; a.click(); URL.revokeObjectURL(a.href);
+  };
+}
+
+// ========================= Interactions ========================= //
+['hWeeks','histWeeks','skuSelect','prep_oos','prep_depromo','prep_impute','f_dow','f_season','f_weather','f_price','f_promo','f_holiday','f_buzz','ma_k','s_m','ses_a','holt_a','holt_b','hw_a','hw_b','hw_g','sar_m','risk_leak','risk_drift']
+.forEach(id=> document.getElementById(id).addEventListener('input', ()=>buildAndRender(false)) );
+
+Array.from(document.querySelectorAll('input[name="model"]')).forEach(r=> r.addEventListener('change',()=>buildAndRender(false)) );
+
+els.btnReset.addEventListener('click', ()=>{
+  els.hWeeks.value=4; els.histWeeks.value=26; els.hWeeksVal.textContent='4'; els.histWeeksVal.textContent='26';
+  els.skuSelect.value='0';
+  ['prep_oos','prep_depromo','risk_leak','risk_drift'].forEach(id=> els[id].checked=false);
+  ['prep_impute','f_dow','f_season','f_weather','f_price','f_promo','f_holiday','f_buzz'].forEach(id=> els[id].checked=true);
+  els.ma_k.value=7; els.s_m.value=7; els.ses_a.value=0.3; els.holt_a.value=0.4; els.holt_b.value=0.2; els.hw_a.value=0.3; els.hw_b.value=0.1; els.hw_g.value=0.3; els.sar_m.value=7;
+  document.querySelector('input[name="model"][value="ma"]').checked=true;
+  buildAndRender(false);
+});
+
+els.btnRetrain.addEventListener('click', ()=>{
+  // Regenerate future (with drift if toggled) and refit ML on latest window
+  buildAndRender(true);
+});
+
+// Initial render: MA(7) ready and KPIs filled
+buildAndRender(false);
+</script>
+</body>
+</html>
